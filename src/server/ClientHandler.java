@@ -1,15 +1,11 @@
 package server;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
+import java.io.*;
 import java.net.Socket;
 
 public class ClientHandler implements Runnable {
-
-    private Socket socket;
-    private Server server;
+    private final Socket socket;
+    private final Server server;
     private BufferedReader in;
     private PrintWriter out;
     private String login;
@@ -26,76 +22,86 @@ public class ClientHandler implements Runnable {
             in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             out = new PrintWriter(socket.getOutputStream(), true);
 
-            String first = in.readLine();
-            if (first == null) return;
+            String line = in.readLine();
+            if (line == null) return;
 
-            if (first.startsWith("TYPE:")) {
-                if (first.equals("TYPE:CLIENT")) {
-                    String l = in.readLine();
-                    String p = in.readLine();
-
-                    if (l != null && l.startsWith("LOGIN:")) {
-                        login = l.substring(6);
-                    } else {
-                        login = "unknown";
-                    }
-
-                    String pass = "";
-                    if (p != null && p.startsWith("PASSWORD:")) {
-                        pass = p.substring(9);
-                    }
-
-                    if (server.checkAuth(login, pass)) {
-                        type = "CLIENT";
-                        out.println("INFO:AUTH_OK");
-                        server.broadcast("INFO:" + login + " joined the chat");
-                        server.addClient(this);
-                    } else {
-                        out.println("INFO:AUTH_FAILED");
-                        close();
-                        return;
-                    }
-
-                    String line;
-                    while ((line = in.readLine()) != null) {
-                        if (line.startsWith("MSG:")) {
-                            String msg = line.substring(4);
-                            server.broadcast("CHAT:" + login + ":" + msg);
-                        } else if (line.equals("EXIT")) {
-                            server.broadcast("INFO:" + login + " left the chat");
-                            break;
-                        } else if (line.startsWith("LOGIN:")) {
-                            login = line.substring(6);
-                        } else if (line.startsWith("PASSWORD:")) {
-                            String pass2 = line.substring(9);
-                        } else if (line.startsWith("TYPE:")) {
-                        } else {
-                        }
-                    }
-
-                } else if (first.equals("TYPE:CHAT")) {
-                    type = "CHAT";
-                    server.addChat(this);
-
-                    String line;
-                    while ((line = in.readLine()) != null) {
-                        if (line.length() > 0) {
-                            server.broadcast("CHAT:CHAT_CLIENT:" + line);
-                        }
-                    }
-
-                } else if (first.equals("TYPE:SHUTDOWN")) {
-                    String secret = in.readLine();
-                    if (secret != null && secret.equals("SECRET:12345")) {
-                        server.broadcast("INFO:Server is shutting down");
-                        server.shutdown();
-                    }
+            if (line.equals("TYPE:CLIENT")) {
+                handleClientAuth();
+                if ("CLIENT".equals(type)) {
+                    handleClientMessages();
                 }
+            } else if (line.equals("TYPE:CHAT")) {
+                type = "CHAT";
+                System.out.println("Chat connected");
+                server.addChat(this);
+                handleChat();
+            } else if (line.equals("TYPE:SHUTDOWN")) {
+                handleShutdown();
             }
 
         } catch (IOException e) {
+            close();
+        }
+    }
+
+    private void handleClientAuth() throws IOException {
+        String loginLine = in.readLine();
+        String passLine = in.readLine();
+
+        if (loginLine == null || passLine == null) return;
+
+        login = loginLine.substring(6);
+        String password = passLine.substring(9);
+
+        if (server.checkAuth(login, password)) {
+            type = "CLIENT";
+            send("INFO:AUTH_OK");
+            System.out.println("Client authenticated: " + login);
+            server.broadcast("INFO:" + login + " joined the chat");
+            server.addClient(this);
+        } else {
+            send("INFO:AUTH_FAILED");
+            close();
+        }
+    }
+
+    private void handleClientMessages() {
+        try {
+            String line;
+            while ((line = in.readLine()) != null) {
+                if (line.startsWith("MSG:")) {
+                    String msg = line.substring(4);
+                    server.broadcast("CHAT:" + login + ":" + msg);
+                } else if (line.equals("EXIT")) {
+                    server.broadcast("INFO:" + login + " left the chat");
+                    break;
+                }
+            }
+        } catch (IOException e) {
+            System.out.println("Client disconnected: " + login);
         } finally {
             close();
+        }
+    }
+
+    private void handleChat() {
+        try {
+            String line;
+            while ((line = in.readLine()) != null) {
+                System.out.println("Chat received: " + line);
+            }
+        } catch (IOException e) {
+            System.out.println("Chat disconnected");
+        } finally {
+            close();
+        }
+    }
+
+    private void handleShutdown() throws IOException {
+        String secret = in.readLine();
+        if ("SECRET:12345".equals(secret)) {
+            server.broadcast("INFO:Server is shutting down");
+            server.shutdown();
         }
     }
 

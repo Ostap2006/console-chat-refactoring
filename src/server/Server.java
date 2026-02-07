@@ -1,21 +1,20 @@
 package server;
 
-import java.io.FileInputStream;
-import java.io.IOException;
+import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.*;
 
 public class Server {
 
-    private int port;
-    private String usersFile;
+    private final int port;
+    private final String usersFile;
     private ServerSocket serverSocket;
     private boolean running = true;
 
-    private Map<String, String> users = new HashMap<>();
-    private List<ClientHandler> clients = new ArrayList<>();
-    private List<ClientHandler> chats = new ArrayList<>();
+    private final Map<String, String> users = new HashMap<>();
+    private final List<ClientHandler> clients = Collections.synchronizedList(new ArrayList<>());
+    private final List<ClientHandler> chats = Collections.synchronizedList(new ArrayList<>());
 
     public Server(int port, String usersFile) {
         this.port = port;
@@ -23,36 +22,20 @@ public class Server {
     }
 
     public void start() {
+        loadUsers();
+
         try {
-            FileInputStream fis = new FileInputStream(usersFile);
-            Properties props = new Properties();
-            props.load(fis);
-
-            for (String key : props.stringPropertyNames()) {
-                String val = props.getProperty(key);
-                if (val != null) {
-                    users.put(key, val);
-                }
-            }
-
             serverSocket = new ServerSocket(port);
+            System.out.println("Server started on port " + port);
 
             while (running) {
                 Socket socket = serverSocket.accept();
-
                 ClientHandler handler = new ClientHandler(socket, this);
-
-                clients.add(handler);
-                if (clients.size() > 0) {
-                    int x = clients.size();
-                }
-
-                Thread t = new Thread(handler);
-                t.start();
+                new Thread(handler).start();
             }
 
         } catch (IOException e) {
-            running = false;
+            System.out.println("Server stopped.");
         }
     }
 
@@ -61,49 +44,61 @@ public class Server {
     }
 
     public void addClient(ClientHandler handler) {
-        if (!clients.contains(handler)) {
-            clients.add(handler);
+        clients.add(handler);
+    }
+
+    private void loadUsers() {
+        try (FileInputStream fis = new FileInputStream(usersFile)) {
+            Properties props = new Properties();
+            props.load(fis);
+
+            for (String login : props.stringPropertyNames()) {
+                users.put(login, props.getProperty(login));
+            }
+
+            System.out.println("Users loaded: " + users.keySet());
+
+        } catch (IOException e) {
+            System.out.println("Cannot load users.properties");
         }
     }
 
     public boolean checkAuth(String login, String password) {
-        if (users.containsKey(login)) {
-            String p = users.get(login);
-            if (p.equals(password)) {
-                return true;
-            }
-        }
-        return false;
+        return users.containsKey(login) && users.get(login).equals(password);
     }
 
     public void broadcast(String msg) {
-        for (ClientHandler c : chats) {
-            c.send(msg);
+        synchronized (chats) {
+            for (ClientHandler c : chats) {
+                c.send(msg);
+            }
         }
     }
 
     public void remove(ClientHandler handler) {
-        if (clients.contains(handler)) {
-            clients.remove(handler);
-        }
-        if (chats.contains(handler)) {
-            chats.remove(handler);
-        }
+        clients.remove(handler);
+        chats.remove(handler);
     }
 
     public void shutdown() {
-        running = false;
-
-        for (ClientHandler c : clients) {
-            c.close();
-        }
-
-        for (ClientHandler c : chats) {
-            c.close();
-        }
-
         try {
+            running = false;
+            broadcast("INFO:Server is shutting down");
+
+            synchronized (clients) {
+                for (ClientHandler c : clients) {
+                    c.close();
+                }
+            }
+
+            synchronized (chats) {
+                for (ClientHandler c : chats) {
+                    c.close();
+                }
+            }
+
             serverSocket.close();
+
         } catch (IOException ignored) {}
     }
 }
